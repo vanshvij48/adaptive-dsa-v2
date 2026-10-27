@@ -23,6 +23,7 @@ type Assessment = {
 
 export default function AssessmentPage() {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
+  const [assessmentId, setAssessmentId] = useState<string | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
 
   const [currentQuestion, setCurrentQuestion] = useState(0);
@@ -31,54 +32,115 @@ export default function AssessmentPage() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [started, setStarted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  async function startAssessment() {
-    try {
-      setLoading(true);
-      setError("");
 
-      const response = await fetch("/api/assessment/start", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+async function startAssessment() {
+  try {
+    setError("");
+    setLoading(true);
 
-      const data = await response.json();
+    // Step 1: Create an assessment record.
+    const startResponse = await fetch("/api/assessment/start", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
 
-      console.log("Assessment response:", data);
+    const startData = await startResponse.json();
 
-      if (!response.ok) {
-        throw new Error(
-          data.error ||
-            `Assessment request failed with status ${response.status}`
-        );
-      }
-
-      if (!data.assessment) {
-        throw new Error("Assessment data was not returned.");
-      }
-
-      if (!Array.isArray(data.questions)) {
-        throw new Error("Questions were not returned correctly.");
-      }
-
-      setAssessment(data.assessment);
-      setQuestions(data.questions);
-      setCurrentQuestion(0);
-      setAnswers({});
-    } catch (err) {
-      console.error("Start assessment error:", err);
-
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to start assessment"
+    if (!startResponse.ok) {
+      throw new Error(
+        startData.error || "Unable to start assessment."
       );
-    } finally {
-      setLoading(false);
     }
+
+    if (!startData.assessment?.id) {
+      throw new Error(
+        "The server did not return a valid assessment ID."
+      );
+    }
+
+    // Step 2: Load questions from the assessment API.
+
+const generateResponse = await fetch("/api/assessment/generate", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    assessmentId:
+      startData.assessment?.id ?? startData.assessmentId,
+  }),
+});
+
+const generateData = await generateResponse.json();
+
+if (!generateResponse.ok) {
+  throw new Error(
+    generateData.error || "Unable to generate assessment."
+  );
+}
+
+setQuestions(generateData.questions);
+setAssessment(generateData.assessmentId ?? generateData.assessment?.id);
+setStarted(true);
+
+  } catch (err) {
+    console.error("Start assessment error:", err);
+
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Unable to start assessment."
+    );
+  } finally {
+    setLoading(false);
   }
+}
+
+
+async function submitAssessment() {
+  try {
+setSubmitting(true);
+    setError("");
+
+    if (!assessment?.id) {
+      throw new Error("Assessment ID is missing.");
+    }
+
+    const response = await fetch("/api/assessment/submit", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        assessmentId: assessment.id,
+        answers,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Unable to submit assessment.");
+    }
+
+    // Move to the results page after successful submission.
+    window.location.href =
+      `/assessment/results/${assessment.id}`;
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Unable to submit assessment."
+    );
+  } finally {
+    setSubmitting(false);
+  }
+}
 
   function selectAnswer(answer: number) {
     const question = questions[currentQuestion];
@@ -190,7 +252,7 @@ export default function AssessmentPage() {
 
           <button
             onClick={startAssessment}
-            disabled={loading}
+            disabled={submitting}
             style={{
               width: "100%",
               padding: "14px",
@@ -322,7 +384,9 @@ export default function AssessmentPage() {
                 marginTop: "8px",
               }}
             >
-              Assessment ID: {assessment.id.slice(0, 8)}...
+Assessment ID: {
+  String(assessment?.id ?? assessmentId ?? "N/A").slice(0, 8)
+}
             </p>
           </div>
 
@@ -439,44 +503,43 @@ export default function AssessmentPage() {
               gap: "12px",
             }}
           >
-            {options.map((option) => {
-              const isSelected =
-                selectedAnswer === option.index;
+{options.map((option, index) => {
+  const optionIndex =
+    typeof option === "string" ? index : option.index;
 
-              return (
-                <button
-                  key={option.index}
-                  onClick={() =>
-                    selectAnswer(option.index)
-                  }
-                  style={{
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "16px",
-                    borderRadius: "10px",
-                    border: isSelected
-                      ? "2px solid #2563eb"
-                      : "1px solid #333333",
-                    background: isSelected
-                      ? "#172554"
-                      : "#202020",
-                    color: "#ffffff",
-                    cursor: "pointer",
-                    fontSize: "16px",
-                  }}
-                >
-                  <strong
-                    style={{
-                      marginRight: "12px",
-                    }}
-                  >
-                    {option.label}.
-                  </strong>
+  const optionLabel =
+    typeof option === "string"
+      ? ["A", "B", "C", "D"][index]
+      : option.label ?? ["A", "B", "C", "D"][index];
 
-                  {option.text}
-                </button>
-              );
-            })}
+  const optionText =
+    typeof option === "string" ? option : option.text;
+
+  const isSelected = selectedAnswer === optionIndex;
+
+  return (
+    <button
+      key={optionIndex}
+      type="button"
+      onClick={() => selectAnswer(optionIndex)}
+      style={{
+        width: "100%",
+        textAlign: "left",
+        padding: "12px",
+        borderRadius: "8px",
+        border: isSelected
+          ? "2px solid #2563eb"
+          : "1px solid #333",
+        background: isSelected ? "#172554" : "#202020",
+        color: "#ffffff",
+        cursor: "pointer",
+        fontSize: "14px",
+      }}
+    >
+      <strong>{optionLabel}.</strong> {optionText}
+    </button>
+  );
+})}
           </div>
 
           {/* NAVIGATION */}
@@ -529,7 +592,8 @@ export default function AssessmentPage() {
               </button>
             ) : (
               <button
-                disabled
+               onClick={submitAssessment}
+                disabled={loading}
                 style={{
                   padding: "12px 25px",
                   borderRadius: "8px",
@@ -540,8 +604,10 @@ export default function AssessmentPage() {
                   fontWeight: 600,
                 }}
               >
-                Submit Assessment
-              </button>
+                 
+{submitting ? "Submitting..." : "Submit Assessment"}
+
+               </button>
             )}
           </div>
         </div>
